@@ -31,6 +31,32 @@ SENIOR_MOD_ROLE_ID = 1504502978374139977
 STAFF_LOG_CHANNEL_ID = 1534568211641798717
 SPECIAL_BAN_ROLE_ID = 1504502759922077776
 
+# New role IDs
+GETSCRIPTS_PANEL_ROLE_ID = 1535263884125143080
+STAFF_ACCEPT_ROLE_ID = 1516192523691884816  # Co-Owner for staffaccept
+SUPPORT_ROLE_ID = 1508782838600830996
+PROMOTE_MIN_ROLE_ID = 1504502883872411800  # Dev and higher
+
+# Promote role options
+PROMOTE_ROLES = {
+    "mod": 1504503217382232166,
+    "senior mod": 1504502978374139977,
+    "manager": 1508790828448092211,
+    "administrator": 1516192523691884816,
+    "co-owner": 1508790026518003713
+}
+
+# Hierarchy for promote (higher index = higher rank)
+PROMOTE_HIERARCHY = [
+    1508782838600830996,  # support
+    1504503217382232166,  # mod
+    1504502978374139977,  # senior mod
+    1508790828448092211,  # manager
+    1516192523691884816,  # administrator
+    1508790026518003713,  # co-owner
+    1504502883872411800,  # dev
+]
+
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='+', intents=intents, help_command=None)
 
@@ -51,6 +77,11 @@ recently_warned_spam = {}
 # Moderation statistics: {moderator_id: {"warned": [{"time": ts, ...}], "banned": [...], ...}}
 mod_stats = defaultdict(lambda: defaultdict(list))
 case_counter = 0
+
+# Key panel storage
+panel_key = "HSX-7562-3194-0835-4981-2470-1488-1029-6967"
+key_panel_message_id = None
+key_panel_channel_id = None
 
 # Система кулдаунов
 command_cooldowns = defaultdict(dict)
@@ -333,6 +364,41 @@ def load_mod_stats():
     except Exception as e:
         print(f"Error loading mod stats: {e}")
 
+def save_panel_key():
+    try:
+        data = {
+            "key": panel_key,
+            "message_id": key_panel_message_id,
+            "channel_id": key_panel_channel_id
+        }
+        with open('panel_key.json', 'w') as f:
+            json.dump(data, f)
+    except Exception as e:
+        print(f"Error saving panel key: {e}")
+
+def load_panel_key():
+    global panel_key, key_panel_message_id, key_panel_channel_id
+    try:
+        if os.path.exists('panel_key.json'):
+            with open('panel_key.json', 'r') as f:
+                data = json.load(f)
+                panel_key = data.get("key", panel_key)
+                key_panel_message_id = data.get("message_id")
+                key_panel_channel_id = data.get("channel_id")
+            print(f"Loaded panel key: {panel_key}")
+    except Exception as e:
+        print(f"Error loading panel key: {e}")
+
+def get_role_hierarchy_position(member):
+    """Return the highest hierarchy index for a member's roles. Higher = more power."""
+    max_pos = -1
+    for role in member.roles:
+        if role.id in PROMOTE_HIERARCHY:
+            pos = PROMOTE_HIERARCHY.index(role.id)
+            if pos > max_pos:
+                max_pos = pos
+    return max_pos
+
 def record_mod_action(moderator_id, action):
     """Record a moderation action for statistics. action: warned, kicked, banned, unbanned, timed_out, jailed, unjailed, unmuted"""
     mod_stats[moderator_id][action].append(time.time())
@@ -354,7 +420,7 @@ async def log_staff_action(ctx, action_name, reason="Staff command used"):
 
 class DeleteTicketButton(Button):
     def __init__(self):
-        super().__init__(label="Delete Ticket", style=discord.ButtonStyle.danger)
+        super().__init__(label="Delete Ticket", style=discord.ButtonStyle.danger, custom_id="delete_ticket_btn")
     
     async def callback(self, interaction: discord.Interaction):
         if interaction.user.bot:
@@ -368,12 +434,17 @@ class DeleteTicketButton(Button):
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
         
+        # Respond immediately to avoid "Application did not respond"
         await interaction.response.send_message("Deleting ticket...", ephemeral=True)
         await asyncio.sleep(1)
         try:
             await interaction.channel.delete()
         except Exception as e:
             print(f"Error deleting channel: {e}")
+            try:
+                await interaction.followup.send(f"Failed to delete channel: {e}", ephemeral=True)
+            except:
+                pass
 
 class TicketView(View):
     def __init__(self):
@@ -381,6 +452,7 @@ class TicketView(View):
     
     @discord.ui.select(
         placeholder="Choose an option...",
+        custom_id="ticket_select",
         options=[
             discord.SelectOption(label="I want to be staff", description="Apply for staff position", emoji="🛡️"),
             discord.SelectOption(label="I want to be developer", description="Apply for developer position", emoji="💻"),
@@ -388,7 +460,7 @@ class TicketView(View):
         ]
     )
     async def select_callback(self, interaction: discord.Interaction, select: discord.ui.Select):
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=True)
         choice = select.values[0]
         
         category = interaction.guild.get_channel(TICKET_CATEGORY_ID)
@@ -436,11 +508,100 @@ class TicketView(View):
         embed.color = discord.Color.from_rgb(255, 255, 255)
         await channel.send(embed=embed)
         
-        view = View()
+        view = View(timeout=None)
         view.add_item(DeleteTicketButton())
         await channel.send("Click the button below to delete this ticket.", view=view)
         
         await interaction.followup.send(f"Ticket created: {channel.mention}", ephemeral=True)
+
+# Scripts content
+SCRIPT_INK_GAME = """🖥️PC:
+```loadstring(game:HttpGet("https://api.luarmor.net/files/v4/loaders/a75e8c01cda2fe4eb7cc2a9b4758b261.lua"))()```
+📱Mobile:
+``loadstring(game:HttpGet("https://api.luarmor.net/files/v4/loaders/a75e8c01cda2fe4eb7cc2a9b4758b261.lua"))()``"""
+
+SCRIPT_DOORS = """🖥️PC:
+```loadstring(game:HttpGet("https://raw.githubusercontent.com/saosdkjiqwdjuqjudidw/doors.lua/refs/heads/main/DoorsScripts"))()```
+📱Mobile:
+``loadstring(game:HttpGet("https://raw.githubusercontent.com/saosdkjiqwdjuqjudidw/doors.lua/refs/heads/main/DoorsScripts"))()``"""
+
+SCRIPT_MM2 = """🖥️PC:
+```getgenv().SCRIPT_KEY = "KEYLESS" loadstring(game:HttpGet("https://api.jnkie.com/api/v1/luascripts/public/948da38862d0b306aab861c4f6338962aed091c4b9f65231f892399ba78cb4a0/download"))()```
+📱Mobile:
+``getgenv().SCRIPT_KEY = "KEYLESS" loadstring(game:HttpGet("https://api.jnkie.com/api/v1/luascripts/public/948da38862d0b306aab861c4f6338962aed091c4b9f65231f892399ba78cb4a0/download"))()``"""
+
+class GetScriptsView(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+    
+    @discord.ui.button(label="Ink Game", style=discord.ButtonStyle.primary, custom_id="getscript_inkgame")
+    async def ink_game_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = discord.Embed(
+            title="Ink Game",
+            description=SCRIPT_INK_GAME,
+            color=discord.Color.from_rgb(255, 255, 255)
+        )
+        try:
+            await interaction.user.send(embed=embed)
+            await interaction.response.send_message("✅ Script sent to your DMs!", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"Error: {e}", ephemeral=True)
+    
+    @discord.ui.button(label="MurderMystery 2", style=discord.ButtonStyle.primary, custom_id="getscript_mm2")
+    async def mm2_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = discord.Embed(
+            title="MurderMystery 2",
+            description=SCRIPT_MM2,
+            color=discord.Color.from_rgb(255, 255, 255)
+        )
+        try:
+            await interaction.user.send(embed=embed)
+            await interaction.response.send_message("✅ Script sent to your DMs!", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"Error: {e}", ephemeral=True)
+    
+    @discord.ui.button(label="Doors", style=discord.ButtonStyle.primary, custom_id="getscript_doors")
+    async def doors_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = discord.Embed(
+            title="Doors",
+            description=SCRIPT_DOORS,
+            color=discord.Color.from_rgb(255, 255, 255)
+        )
+        try:
+            await interaction.user.send(embed=embed)
+            await interaction.response.send_message("✅ Script sent to your DMs!", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"Error: {e}", ephemeral=True)
+
+class KeyPanelView(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+    
+    @discord.ui.button(label="Get Free key", style=discord.ButtonStyle.success, custom_id="get_free_key_btn")
+    async def get_key_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        current_key = panel_key
+        text = f"""Your free key for Doors & Mm2 & Ink Game
+🖥️PC:
+```{current_key}```
+📱Mobile:
+``{current_key}``"""
+        embed = discord.Embed(
+            description=text,
+            color=discord.Color.from_rgb(255, 255, 255)
+        )
+        try:
+            await interaction.user.send(embed=embed)
+            await interaction.response.send_message("✅ Key sent to your DMs!", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"Error: {e}", ephemeral=True)
 
 @bot.event
 async def on_ready():
@@ -463,6 +624,15 @@ async def on_ready():
     load_warnings()
     load_hardbanned()
     load_mod_stats()
+    load_panel_key()
+    
+    # Register persistent views
+    bot.add_view(TicketView())
+    bot.add_view(GetScriptsView())
+    bot.add_view(KeyPanelView())
+    delete_view = View(timeout=None)
+    delete_view.add_item(DeleteTicketButton())
+    bot.add_view(delete_view)
     
     # Sync slash commands
     try:
@@ -2007,6 +2177,11 @@ async def help_commands(ctx):
     )
     embed3.add_field(name="+showstafflist", value="Show all staff members", inline=False)
     embed3.add_field(name="+moderatorsinfo", value="Show staff permissions", inline=False)
+    embed3.add_field(name="+setgetscriptspanel", value="Send Get Scripts panel", inline=False)
+    embed3.add_field(name="+setupkeypanel", value="Send Get Key panel", inline=False)
+    embed3.add_field(name="+changekeyinpanel <key>", value="Change key in panel", inline=False)
+    embed3.add_field(name="+staffaccept", value="Accept user to staff (reply)", inline=False)
+    embed3.add_field(name="+promote <role>", value="Promote user (reply)", inline=False)
     embed3.add_field(name="+help", value="Show this help message", inline=False)
     embed3.add_field(name="Available Roles", value=", ".join(role_map.keys()), inline=False)
     embed3.set_footer(text="Most commands also work as slash commands (/)")
@@ -2134,6 +2309,269 @@ async def purge(ctx, amount: int = None):
         await log_staff_action(ctx, "purge", f"Purged {len(deleted) - 1} messages in {ctx.channel.mention}")
     except Exception as e:
         await ctx.send(f"Error: {e}")
+
+# ========== NEW COMMANDS ==========
+
+@bot.hybrid_command(name="setgetscriptspanel", description="Send the Get Scripts panel")
+async def setgetscriptspanel(ctx):
+    has_role = any(role.id == GETSCRIPTS_PANEL_ROLE_ID for role in ctx.author.roles)
+    if not has_role and not ctx.author.guild_permissions.administrator:
+        embed = discord.Embed(
+            description=f"This command is only available for <@&{GETSCRIPTS_PANEL_ROLE_ID}>!",
+            color=discord.Color.from_rgb(200, 70, 70)
+        )
+        await ctx.send(embed=embed)
+        return
+    
+    embed = discord.Embed(
+        title="Get scripts that you want below",
+        description="Choose a script below that you wanted, script will be sent to your dms",
+        color=discord.Color.from_rgb(255, 255, 255)
+    )
+    
+    view = GetScriptsView()
+    await ctx.send(embed=embed, view=view)
+    
+    success_embed = discord.Embed(
+        description="✅ Panel was sent",
+        color=discord.Color.from_rgb(100, 200, 120)
+    )
+    try:
+        if ctx.interaction:
+            await ctx.send(embed=success_embed, ephemeral=True)
+        else:
+            await ctx.send(embed=success_embed, delete_after=5)
+    except:
+        await ctx.send(embed=success_embed)
+
+@bot.hybrid_command(name="staffaccept", description="Accept a user to staff (reply to their message)")
+async def staffaccept(ctx):
+    has_role = any(role.id == STAFF_ACCEPT_ROLE_ID for role in ctx.author.roles)
+    if not has_role and not ctx.author.guild_permissions.administrator:
+        embed = discord.Embed(
+            description=f"This command is only available for <@&{STAFF_ACCEPT_ROLE_ID}> and higher.",
+            color=discord.Color.from_rgb(200, 70, 70)
+        )
+        await ctx.send(embed=embed)
+        return
+    
+    if not ctx.message or not ctx.message.reference:
+        embed = discord.Embed(
+            description="You must reply to a message to use this command.\n**Usage:** Reply to a user and type `+staffaccept`",
+            color=discord.Color.from_rgb(255, 200, 0)
+        )
+        await ctx.send(embed=embed)
+        return
+    
+    try:
+        referenced = await ctx.channel.fetch_message(ctx.message.reference.message_id)
+        target = referenced.author
+    except:
+        await ctx.send("Could not find the message you replied to.")
+        return
+    
+    if not isinstance(target, discord.Member):
+        target = ctx.guild.get_member(target.id)
+        if not target:
+            await ctx.send("User is not in this server.")
+            return
+    
+    support_role = ctx.guild.get_role(SUPPORT_ROLE_ID)
+    if not support_role:
+        await ctx.send("Support role not found.")
+        return
+    
+    try:
+        await target.add_roles(support_role, reason=f"Accepted to staff by {ctx.author}")
+    except Exception as e:
+        await ctx.send(f"Failed to add role: {e}")
+        return
+    
+    embed = discord.Embed(
+        description=f"{target.mention} has been accepted to staff.",
+        color=discord.Color.from_rgb(100, 200, 120)
+    )
+    await ctx.send(embed=embed)
+    
+    try:
+        dm_embed = discord.Embed(
+            title="Your ticket has been accepted!",
+            description="please check staff-info to start moderate.",
+            color=discord.Color.from_rgb(100, 200, 120)
+        )
+        await target.send(embed=dm_embed)
+    except:
+        pass
+    
+    await log_staff_action(ctx, "staffaccept", f"Accepted {target.mention} to staff")
+
+@bot.hybrid_command(name="promote", description="Promote a user to a staff role (reply to their message)")
+@app_commands.describe(role="Role to promote to: mod, senior mod, manager, administrator, co-owner")
+async def promote(ctx, *, role: str = None):
+    author_pos = get_role_hierarchy_position(ctx.author)
+    min_pos = PROMOTE_HIERARCHY.index(PROMOTE_MIN_ROLE_ID) if PROMOTE_MIN_ROLE_ID in PROMOTE_HIERARCHY else 0
+    
+    has_access = author_pos >= min_pos or ctx.author.guild_permissions.administrator
+    if not has_access:
+        embed = discord.Embed(
+            description=f"This command is only available for <@&{PROMOTE_MIN_ROLE_ID}> and higher.",
+            color=discord.Color.from_rgb(200, 70, 70)
+        )
+        await ctx.send(embed=embed)
+        return
+    
+    if role is None:
+        embed = discord.Embed(
+            description="**Usage:** Reply to a user with `+promote <role>`\n**Available roles:** mod, senior mod, manager, administrator, co-owner",
+            color=discord.Color.from_rgb(255, 200, 0)
+        )
+        await ctx.send(embed=embed)
+        return
+    
+    if not ctx.message or not ctx.message.reference:
+        embed = discord.Embed(
+            description="You must reply to a message to use this command.\n**Usage:** Reply to a user and type `+promote <role>`",
+            color=discord.Color.from_rgb(255, 200, 0)
+        )
+        await ctx.send(embed=embed)
+        return
+    
+    role_lower = role.lower().strip()
+    if role_lower not in PROMOTE_ROLES:
+        embed = discord.Embed(
+            description="Invalid role. Available: mod, senior mod, manager, administrator, co-owner",
+            color=discord.Color.from_rgb(255, 200, 0)
+        )
+        await ctx.send(embed=embed)
+        return
+    
+    try:
+        referenced = await ctx.channel.fetch_message(ctx.message.reference.message_id)
+        target = referenced.author
+    except:
+        await ctx.send("Could not find the message you replied to.")
+        return
+    
+    if not isinstance(target, discord.Member):
+        target = ctx.guild.get_member(target.id)
+        if not target:
+            await ctx.send("User is not in this server.")
+            return
+    
+    role_id = PROMOTE_ROLES[role_lower]
+    new_role = ctx.guild.get_role(role_id)
+    if not new_role:
+        await ctx.send("Role not found on this server.")
+        return
+    
+    target_role_pos = PROMOTE_HIERARCHY.index(role_id) if role_id in PROMOTE_HIERARCHY else -1
+    if target_role_pos >= author_pos and not ctx.author.guild_permissions.administrator:
+        embed = discord.Embed(
+            description="You cannot promote someone to a role equal or higher than yours.",
+            color=discord.Color.from_rgb(200, 70, 70)
+        )
+        await ctx.send(embed=embed)
+        return
+    
+    try:
+        await target.add_roles(new_role, reason=f"Promoted by {ctx.author}")
+        embed = discord.Embed(
+            description=f"{target.mention} has been promoted to **{new_role.name}**.",
+            color=discord.Color.from_rgb(100, 200, 120)
+        )
+        await ctx.send(embed=embed)
+        await log_staff_action(ctx, "promote", f"Promoted {target.mention} to {new_role.name}")
+    except discord.Forbidden:
+        await ctx.send("I do not have permission to give this role.")
+    except Exception as e:
+        await ctx.send(f"Error: {e}")
+
+@bot.hybrid_command(name="setupkeypanel", description="Send the Get Key panel")
+async def setupkeypanel(ctx):
+    has_role = any(role.id == GETSCRIPTS_PANEL_ROLE_ID for role in ctx.author.roles)
+    if not has_role and not ctx.author.guild_permissions.administrator:
+        embed = discord.Embed(
+            description=f"This command is only available for <@&{GETSCRIPTS_PANEL_ROLE_ID}>!",
+            color=discord.Color.from_rgb(200, 70, 70)
+        )
+        await ctx.send(embed=embed)
+        return
+    
+    global key_panel_message_id, key_panel_channel_id
+    
+    embed = discord.Embed(
+        title="Get key for scripts below",
+        description='Press "Get Free key" for key to access mm2 & Ink Game ( loader ) & Doors',
+        color=discord.Color.from_rgb(255, 255, 255)
+    )
+    
+    view = KeyPanelView()
+    msg = await ctx.send(embed=embed, view=view)
+    
+    key_panel_message_id = msg.id
+    key_panel_channel_id = ctx.channel.id
+    save_panel_key()
+    
+    success_embed = discord.Embed(
+        description="✅ Key panel was sent",
+        color=discord.Color.from_rgb(100, 200, 120)
+    )
+    try:
+        if ctx.interaction:
+            await ctx.send(embed=success_embed, ephemeral=True)
+        else:
+            await ctx.send(embed=success_embed, delete_after=5)
+    except:
+        await ctx.send(embed=success_embed)
+
+@bot.hybrid_command(name="changekeyinpanel", description="Change the key in the key panel")
+@app_commands.describe(new_key="The new key to set")
+async def changekeyinpanel(ctx, *, new_key: str = None):
+    has_role = any(role.id == GETSCRIPTS_PANEL_ROLE_ID for role in ctx.author.roles)
+    if not has_role and not ctx.author.guild_permissions.administrator:
+        embed = discord.Embed(
+            description=f"This command is only available for <@&{GETSCRIPTS_PANEL_ROLE_ID}>!",
+            color=discord.Color.from_rgb(200, 70, 70)
+        )
+        await ctx.send(embed=embed)
+        return
+    
+    if new_key is None:
+        embed = discord.Embed(
+            description="**Usage:** `+changekeyinpanel <new_key>`\n**Example:** `+changekeyinpanel FREE_1488`",
+            color=discord.Color.from_rgb(255, 200, 0)
+        )
+        await ctx.send(embed=embed)
+        return
+    
+    global panel_key, key_panel_message_id, key_panel_channel_id
+    panel_key = new_key.strip()
+    save_panel_key()
+    
+    embed = discord.Embed(
+        title="Get key for scripts below",
+        description='Press "Get Free key" for key to access mm2 & Ink Game ( loader ) & Doors',
+        color=discord.Color.from_rgb(255, 255, 255)
+    )
+    
+    view = KeyPanelView()
+    msg = await ctx.send(embed=embed, view=view)
+    
+    key_panel_message_id = msg.id
+    key_panel_channel_id = ctx.channel.id
+    save_panel_key()
+    
+    success_embed = discord.Embed(
+        description=f"✅ Key changed to `{panel_key}` and panel re-sent.",
+        color=discord.Color.from_rgb(100, 200, 120)
+    )
+    try:
+        if ctx.interaction:
+            await ctx.send(embed=success_embed, ephemeral=True)
+        else:
+            await ctx.send(embed=success_embed, delete_after=5)
+    except:
+        await ctx.send(embed=success_embed)
 
 # ========== ADMIN ONLY (prefix only, no slash) ==========
 
