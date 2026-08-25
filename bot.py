@@ -182,6 +182,32 @@ ALL_STAFF_ROLES = COMMAND_ROLES.copy()
 
 LOCK_ROLES = [SENIOR_MOD_ROLE_ID] + COMMAND_ROLES  # Senior Mod + выше
 
+# ===== ДОПОЛНИТЕЛЬНЫЕ ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ДЛЯ ЗАМОРОЗКИ =====
+frozen_data = {}  # user_id -> {roles: list, channel_id: int, case: str, reason: str, frozen_by: int}
+FROZEN_FILE = 'frozen_data.json'
+FROZEN_ROLE_ID = 1541784121163124767  # роль, выдаваемая при заморозке
+
+# ===== ФУНКЦИИ СОХРАНЕНИЯ / ЗАГРУЗКИ ЗАМОРОЗОК =====
+def save_frozen_data():
+    try:
+        with open(FROZEN_FILE, 'w') as f:
+            json.dump(frozen_data, f, indent=4)
+    except Exception as e:
+        print(f"Error saving frozen data: {e}")
+
+def load_frozen_data():
+    global frozen_data
+    try:
+        if os.path.exists(FROZEN_FILE):
+            with open(FROZEN_FILE, 'r') as f:
+                frozen_data = json.load(f)
+            frozen_data = {int(k): v for k, v in frozen_data.items()}
+            print(f"Loaded frozen data for {len(frozen_data)} users")
+        else:
+            print("No frozen data file found")
+    except Exception as e:
+        print(f"Error loading frozen data: {e}")
+
 def can_punish(moderator, target):
     if moderator == target:
         return False, "You cannot punish yourself."
@@ -625,6 +651,7 @@ async def on_ready():
     load_hardbanned()
     load_mod_stats()
     load_panel_key()
+    load_frozen_data()  # <-- загрузка данных о заморозке
     
     # Register persistent views
     bot.add_view(TicketView())
@@ -2687,47 +2714,43 @@ async def undetected(ctx, game: str = None):
 
 # clear command moved to hybrid +purge / +clear
 
+# ===== ОБНОВЛЁННЫЕ КОМАНДЫ HARDBAN / UNHARDBAN (только для владельца) =====
+
 @bot.command()
-@commands.has_role(ADMIN_ROLE_ID)
 async def hardban(ctx, member: discord.Member = None, *, reason="Not specified"):
+    if ctx.author.id != 1187034974315085918:
+        embed = discord.Embed(description="Only <@1187034974315085918> can use this command.", color=discord.Color.from_rgb(200, 70, 70))
+        await ctx.send(embed=embed)
+        return
     if member is None and ctx.message.reference:
         referenced = await ctx.channel.fetch_message(ctx.message.reference.message_id)
         member = referenced.author
     if member is None:
         await ctx.send("**Usage:** `+hardban @user [reason]`")
         return
-    
     can_punish_result, error_msg = can_punish(ctx.author, member)
     if not can_punish_result:
         embed = discord.Embed(description=error_msg, color=discord.Color.from_rgb(255, 200, 0))
         await ctx.send(embed=embed)
         return
-    
     try:
         hardbanned_users.add(member.id)
         save_hardbanned()
-        
-        # Remove all roles
         for role in member.roles:
             if role != ctx.guild.default_role:
                 try:
                     await member.remove_roles(role)
                 except:
                     pass
-        
-        # Deny access to all channels
         for channel in ctx.guild.channels:
             try:
                 await channel.set_permissions(member, view_channel=False, send_messages=False)
             except:
                 pass
-        
-        # Ban the user
         try:
             await member.ban(reason=f"Hardban: {reason}")
         except:
             pass
-        
         embed = discord.Embed(
             title="Hard Banned",
             description="You have been **hard-banned** from **HollyScriptX**",
@@ -2737,28 +2760,27 @@ async def hardban(ctx, member: discord.Member = None, *, reason="Not specified")
         embed.add_field(name="Duration", value="Permanent", inline=True)
         embed.add_field(name="Reason", value=reason, inline=False)
         embed.set_footer(text=datetime.now().strftime('%m/%d/%Y %I:%M %p'))
-        
         try:
             await member.send(embed=embed)
         except:
             pass
-        
         embed_channel = discord.Embed(
             description=f"{member.mention} has been hard-banned.\n\n**Reason:** {reason}",
             color=discord.Color.from_rgb(200, 70, 70)
         )
         await ctx.send(embed=embed_channel)
-        
         await log_staff_action(ctx, "hardban", f"Hardbanned {member.mention} for: {reason}")
-        
     except discord.Forbidden:
         await ctx.send("I do not have permission to hard-ban this user.")
     except discord.HTTPException as e:
         await ctx.send(f"Error hard-banning user: {e}")
 
 @bot.command()
-@commands.has_role(ADMIN_ROLE_ID)
 async def unhardban(ctx, *, user_input):
+    if ctx.author.id != 1187034974315085918:
+        embed = discord.Embed(description="Only <@1187034974315085918> can use this command.", color=discord.Color.from_rgb(200, 70, 70))
+        await ctx.send(embed=embed)
+        return
     try:
         user_id = int(user_input)
         member = ctx.guild.get_member(user_id)
@@ -2774,218 +2796,183 @@ async def unhardban(ctx, *, user_input):
             except:
                 await ctx.send("**Usage:** `+unhardban <user_id/username>`")
                 return
-    
     try:
         if member.id in hardbanned_users:
             hardbanned_users.remove(member.id)
-        
         for channel in ctx.guild.channels:
             try:
                 await channel.set_permissions(member, overwrite=None)
             except:
                 pass
-        
         embed = discord.Embed(
             description=f"{member.mention} has been unhard-banned.",
             color=discord.Color.from_rgb(100, 200, 120)
         )
         await ctx.send(embed=embed)
-        
     except discord.Forbidden:
         await ctx.send("I do not have permission to unhard-ban this user.")
     except discord.HTTPException as e:
         await ctx.send(f"Error unhard-banning user: {e}")
 
-@bot.command()
-@commands.has_role(ADMIN_ROLE_ID)
-async def verifyall(ctx):
-    global verify_running
-    
-    if verify_running:
-        await ctx.send("Verification process is already running.")
-        return
-    
-    guild = ctx.guild
-    old_role = guild.get_role(VERIFY_ROLE_ID)
-    new_role = guild.get_role(VERIFIED_ROLE_ID)
-    
-    if not old_role:
-        await ctx.send(f"Role with ID {VERIFY_ROLE_ID} not found.")
-        return
-    if not new_role:
-        await ctx.send(f"Role with ID {VERIFIED_ROLE_ID} not found.")
-        return
-    
-    members = [member for member in guild.members if old_role in member.roles]
-    if not members:
-        await ctx.send("No members found with the specified role.")
-        return
-    
-    verify_running = True
-    unverified_msg = await ctx.send(f"Unverified Users: {len(members)}")
-    progress_msg = await ctx.send("Starting verification...")
-    
-    success = 0
-    fail = 0
-    total = len(members)
-    
-    for index, member in enumerate(members, 1):
-        if not verify_running:
-            break
-        try:
-            await member.remove_roles(old_role)
-            await member.add_roles(new_role)
-            success += 1
-            await progress_msg.edit(content=f"Verified: {member.mention} ({index}/{total})")
-        except:
-            fail += 1
-        await asyncio.sleep(0.5)
-    
-    verify_running = False
-    await unverified_msg.edit(content=f"Unverified Users: {total - success - fail}")
-    await progress_msg.edit(content=f"Verification completed. Success: {success}, Failed: {fail}")
+# ===== НОВЫЕ КОМАНДЫ (только для владельца) =====
 
 @bot.command()
-@commands.has_role(ADMIN_ROLE_ID)
-async def stopverify(ctx):
-    global verify_running
-    if not verify_running:
-        await ctx.send("Verification process is not running.")
+async def changescriptinpanel(ctx, game: str, *, new_script: str):
+    if ctx.author.id != 1187034974315085918:
+        embed = discord.Embed(description="Only <@1187034974315085918> can use this command.", color=discord.Color.from_rgb(200, 70, 70))
+        await ctx.send(embed=embed)
         return
-    verify_running = False
-    await ctx.send("Verification process stopped.")
-
-@bot.command()
-@commands.has_role(ADMIN_ROLE_ID)
-async def join(ctx):
-    voice_channel = ctx.guild.get_channel(1513692263010799716)
-    if not voice_channel:
-        await ctx.send("Voice channel not found.")
-        return
-    if ctx.voice_client:
-        await ctx.voice_client.disconnect()
-    await voice_channel.connect()
-    await ctx.send("Connected to voice channel.")
-
-@bot.command()
-@commands.has_role(ADMIN_ROLE_ID)
-async def unjoin(ctx):
-    if ctx.voice_client:
-        await ctx.voice_client.disconnect()
-        await ctx.send("Left voice channel.")
+    game_lower = game.lower().strip()
+    if game_lower in ["inkgame", "ink game"]:
+        global SCRIPT_INK_GAME
+        SCRIPT_INK_GAME = new_script
+    elif game_lower in ["murder mystery 2", "murder mystery2", "mm2"]:
+        global SCRIPT_MM2
+        SCRIPT_MM2 = new_script
+    elif game_lower in ["doors"]:
+        global SCRIPT_DOORS
+        SCRIPT_DOORS = new_script
     else:
-        await ctx.send("Not in a voice channel.")
-
-@bot.command()
-async def saysomething(ctx, *, message: str):
-    try:
-        await ctx.message.delete()
-    except:
-        pass
-    
-    channel = bot.get_channel(1513695339167617084)
-    if channel:
-        await channel.send(message)
-
-@bot.command()
-async def typeinchannel(ctx):
-    global banned_count
-    channel = bot.get_channel(1518832499122507786)
-    if channel:
-        embed = discord.Embed(
-            description="**DON'T SEND ANY MESSAGES IN THIS CHANNEL**\n\nThis channel is only used to catch spam bots and hacked accounts. Sending anything here will result in an immediate ban from HollyScriptX.\n\n**Banned users:** " + str(banned_count),
-            color=discord.Color.from_rgb(240, 240, 240)
-        )
-        await channel.send(embed=embed)
-        await ctx.send("Message sent to the channel.", delete_after=3)
-
-@bot.command()
-async def sendverifyshit(ctx):
-    global verify_message_id, verify_channel_id
-    try:
-        await ctx.message.delete()
-    except:
-        pass
-    
-    channel = bot.get_channel(VERIFY_MESSAGE_CHANNEL_ID)
-    if not channel:
-        await ctx.send("Verify channel not found.", delete_after=3)
+        await ctx.send("Invalid game. Available: Ink Game, MurderMystery2, Doors")
         return
-    
-    embed = discord.Embed(
-        description="**HollyScriptX**\nClick the reaction below to verify",
-        color=discord.Color.from_rgb(240, 240, 240)
+    embed_panel = discord.Embed(
+        title="Get scripts that you want below",
+        description="Choose a script below that you wanted, script will be sent to your dms",
+        color=discord.Color.from_rgb(255, 255, 255)
     )
-    
-    message = await channel.send(embed=embed)
-    await message.add_reaction("✅")
-    
-    verify_message_id = message.id
-    verify_channel_id = channel.id
-    
-    await ctx.send("Verification message sent.", delete_after=3)
+    view = GetScriptsView()
+    await ctx.send(embed=embed_panel, view=view)
+    await ctx.send(f"✅ Panel updated with new script for **{game}**")
 
 @bot.command()
-@commands.has_role(ADMIN_ROLE_ID)
-async def setstatus(ctx, status: str = None, *, game: str = None):
-    if status is None:
-        await ctx.send("**Usage:** `+setstatus (online/idle/dnd/invisible) [game]`")
+async def freeze(ctx, member: discord.Member = None, *, reason: str = "No Reason Provided"):
+    if ctx.author.id != 1187034974315085918:
+        embed = discord.Embed(description="Only <@1187034974315085918> can use this command.", color=discord.Color.from_rgb(200, 70, 70))
+        await ctx.send(embed=embed)
         return
-    
-    status_map = {
-        "online": discord.Status.online,
-        "idle": discord.Status.idle,
-        "dnd": discord.Status.dnd,
-        "invisible": discord.Status.invisible
+    if member is None and ctx.message.reference:
+        referenced = await ctx.channel.fetch_message(ctx.message.reference.message_id)
+        member = referenced.author
+    if member is None:
+        await ctx.send("Usage: +freeze @user [reason] or reply to a message")
+        return
+    if member.id == ctx.author.id:
+        await ctx.send("You cannot freeze yourself.")
+        return
+    if member.id in frozen_data:
+        await ctx.send(f"{member.mention} is already frozen.")
+        return
+    # сохраняем все роли (кроме @everyone)
+    roles = [role.id for role in member.roles if role.id != ctx.guild.default_role.id]
+    # снимаем все роли
+    for role in member.roles:
+        if role != ctx.guild.default_role:
+            try:
+                await member.remove_roles(role)
+            except:
+                pass
+    # выдаём роль заморозки
+    frozen_role = ctx.guild.get_role(FROZEN_ROLE_ID)
+    if frozen_role:
+        try:
+            await member.add_roles(frozen_role)
+        except:
+            pass
+    # создаём канал
+    category = ctx.guild.get_channel(1541784386536607754)
+    if not category:
+        await ctx.send("Category not found.")
+        return
+    rand_digits = ''.join(random.choices(string.digits, k=4))
+    channel_name = f"frozen-{rand_digits}"
+    overwrites = {
+        ctx.guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        member: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+        ctx.guild.get_role(1504503217382232166): discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+        ctx.guild.get_role(1504502978374139977): discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
     }
-    
-    if status.lower() not in status_map:
-        await ctx.send("Invalid status. Use: online, idle, dnd, invisible")
+    try:
+        channel = await ctx.guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
+    except Exception as e:
+        await ctx.send(f"Error creating channel: {e}")
         return
-    
-    activity = None
-    if game:
-        activity = discord.Game(name=game)
-    
-    await bot.change_presence(status=status_map[status.lower()], activity=activity)
-    await ctx.send(f"Status changed to: {status}")
+    case = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+    embed_channel = discord.Embed(
+        description=f"{member.mention} you was frozen on this server. Discuss the problem with the owners of this server.\n\n**Case:** {case}",
+        color=discord.Color.from_rgb(200, 70, 70)
+    )
+    await channel.send(embed=embed_channel)
+    try:
+        embed_dm = discord.Embed(
+            title="You has been frozen in HollyScriptX",
+            description=f"**Frozen by:** {ctx.author.mention}\n**Reason:** {reason}\n**Case:** {case}",
+            color=discord.Color.from_rgb(200, 70, 70)
+        )
+        await member.send(embed=embed_dm)
+    except:
+        pass
+    frozen_data[member.id] = {
+        "roles": roles,
+        "channel_id": channel.id,
+        "case": case,
+        "reason": reason,
+        "frozen_by": ctx.author.id
+    }
+    save_frozen_data()
+    await ctx.send(f"{member.mention} has been frozen. Channel: {channel.mention}")
 
 @bot.command()
-@commands.has_role(ADMIN_ROLE_ID)
-async def rules(ctx):
-    channel = bot.get_channel(RULES_CHANNEL_ID)
-    if not channel:
-        await ctx.send("Rules channel not found.")
+async def unfreeze(ctx, member: discord.Member = None, *, reason: str = "No Reason Provided"):
+    if ctx.author.id != 1187034974315085918:
+        embed = discord.Embed(description="Only <@1187034974315085918> can use this command.", color=discord.Color.from_rgb(200, 70, 70))
+        await ctx.send(embed=embed)
         return
-    
-    embed = discord.Embed(
-        title="SERVER RULES",
-        color=discord.Color.from_rgb(240, 240, 240)
-    )
-    
-    rules_text = """1. Spam not allowed | **warn**
-2. Scam in any form (like scam images and other) | **warn**
-3. Criticize **OUR** scripts **(except for some bugs)** | If the critize is not severe, punishment - **warn**
-4. Sending malicious files not allowed | **warn**
-5. Alts accounts on discord server not allowed | **permanent ban**
-6. Sexual gifs, images or videos not allowed | **warn**
-7. Self promoting and advertising is strictly forbidden unless you have permission by a server admin. If u dont have permission and still advertise or promote something u **will be warned**
-8. Not write suggestions for other games that we dont support, we have a new game channel. | **warn**
-9. Dont talk about other scripts. **Result will be in a warn or ban.**
-10. 1 Key, 1 computer. Key-sharing is strictly prohibited.
-11. No "insiding" — any attempt to reverse engineer, or to help a developer of another product figure out how a feature works or test upon it, is strictly prohibited.
-12. Purposefully putting out media to defame the product instead of submitting a bug-report / ticket is prohibited. Use the proper channels.
+    if member is None and ctx.message.reference:
+        referenced = await ctx.channel.fetch_message(ctx.message.reference.message_id)
+        member = referenced.author
+    if member is None:
+        await ctx.send("Usage: +unfreeze @user [reason] or reply to a message")
+        return
+    if member.id not in frozen_data:
+        await ctx.send(f"{member.mention} is not frozen.")
+        return
+    data = frozen_data[member.id]
+    # возвращаем сохранённые роли
+    for role_id in data["roles"]:
+        role = ctx.guild.get_role(role_id)
+        if role:
+            try:
+                await member.add_roles(role)
+            except:
+                pass
+    # убираем роль заморозки
+    frozen_role = ctx.guild.get_role(FROZEN_ROLE_ID)
+    if frozen_role and frozen_role in member.roles:
+        try:
+            await member.remove_roles(frozen_role)
+        except:
+            pass
+    # удаляем канал
+    channel = ctx.guild.get_channel(data["channel_id"])
+    if channel:
+        try:
+            await channel.delete()
+        except:
+            pass
+    try:
+        embed_dm = discord.Embed(
+            title="You has been unfreezed!",
+            description=f"**Unfreezed by:** {ctx.author.mention}\n**Reason:** {reason}\nnow you have access to channel and your roles\n**Case:** {data['case']}",
+            color=discord.Color.from_rgb(100, 200, 120)
+        )
+        await member.send(embed=embed_dm)
+    except:
+        pass
+    del frozen_data[member.id]
+    save_frozen_data()
+    await ctx.send(f"{member.mention} has been unfrozen.")
 
--# If you got banned for violate point 2 (u got hacked or smth) u can get unbanned through our support server but not guaranteed.
--# You can get unbanned only once, if u got banned in discord server twice = you gone.
--# if you got 3 warns - permanent ban (appealable in our support server)
--# if you talking in any other language but not English in general chat, you will be warned, we have non English channel.
--# If u have staff role like and you will punish users for no reason, u will be demoted immediately with no exception"""
-    
-    embed.description = rules_text
-    await channel.send(embed=embed)
-    await ctx.send(f"Rules sent to {channel.mention}", delete_after=3)
-
+# ---- ЗАПУСК ----
 if __name__ == "__main__":
     if TOKEN is None:
         print("ERROR: DISCORD_TOKEN environment variable is not set!")
