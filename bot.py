@@ -1075,7 +1075,7 @@ async def auto_ban(message):
         member = message.author
         banned_count += 1
         
-        log_channel = bot.get_channel(1518832499122507786)
+        log_channel = bot.get_channel(1541487419378110524)
         if log_channel:
             embed = discord.Embed(
                 description=f"{member.mention} has been permanently **banned** from **HollyScriptX**\n\n**Reason:** Scammed Accounts detection 1.0\n**Typed Message:**\n{message.content}",
@@ -1929,7 +1929,7 @@ async def showstafflist(ctx):
 async def moderatorsinfo(ctx):
     embed = discord.Embed(
         title="Staff Permissions Guide",
-        description="""**<@&1516192523691884816> Co-Owner**
+        description="""**<@&1516192523691884816> Administrator**
 Full server control
 
 **<@&1508790828448092211> Manager**
